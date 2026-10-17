@@ -222,5 +222,5 @@ else:
                 save_conversations()
 
             except Exception as error:
-                st.error("وقع مشكل في الاتصال بـ Gemini.")
-                st.code(repr(error))
+    st.error("Gemini request failed")
+    st.code(repr(error))
