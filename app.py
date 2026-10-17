@@ -2,189 +2,222 @@
 import os
 import json
 import uuid
+from datetime import datetime
+
 import streamlit as st
-import sys
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8")
 from dotenv import load_dotenv
 from google import genai
+
+# -------------------- Configuration --------------------
 
 load_dotenv()
 
 st.set_page_config(
     page_title="My AI Chatbot",
-    page_icon="🤖",
-    layout="wide"
+    page_icon="💬",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not API_KEY:
-    try:
-        API_KEY = st.secrets["GEMINI_API_KEY"]
-    except (KeyError, FileNotFoundError):
-        API_KEY = None
 CHAT_FILE = "conversations.json"
+MODEL_NAME = "gemini-2.5-flash"
+
+
+# -------------------- API Key --------------------
+
+def get_api_key():
+    key = os.getenv("GEMINI_API_KEY")
+
+    if key:
+        return key
+
+    try:
+        return st.secrets["GEMINI_API_KEY"]
+    except (KeyError, FileNotFoundError):
+        return None
+
+
+API_KEY = get_api_key()
 
 if not API_KEY:
-    st.error("تأكد من وجود GEMINI_API_KEY في ملف .env")
+    st.error(
+        "مفتاح Gemini API غير موجود. "
+        "أضفه في Streamlit Secrets."
+    )
     st.stop()
 
-client = genai.Client(api_key=API_KEY)
 
-# ---------- Save and load conversations ----------
+@st.cache_resource
+def get_client(api_key):
+    return genai.Client(api_key=api_key)
+
+
+client = get_client(API_KEY)
+
+
+# -------------------- Conversations --------------------
+
+def new_chat():
+    chat_id = str(uuid.uuid4())
+
+    return {
+        "id": chat_id,
+        "title": "محادثة جديدة",
+        "messages": [],
+        "created_at": datetime.now().isoformat(),
+    }
+
 
 def load_conversations():
-    if os.path.exists(CHAT_FILE):
-        try:
-            with open(CHAT_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {}
+    if not os.path.exists(CHAT_FILE):
+        return []
+
+    try:
+        with open(CHAT_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        return data if isinstance(data, list) else []
+
+    except (json.JSONDecodeError, OSError):
+        return []
 
 
 def save_conversations():
-    with open(CHAT_FILE, "w", encoding="utf-8") as f:
-        json.dump(
-            st.session_state.conversations,
-            f,
-            ensure_ascii=False,
-            indent=2
+    try:
+        with open(CHAT_FILE, "w", encoding="utf-8") as file:
+            json.dump(
+                st.session_state.conversations,
+                file,
+                ensure_ascii=False,
+                indent=2,
+            )
+    except OSError:
+        st.warning(
+            "تعذر حفظ المحادثات على الخادم. "
+            "قد لا تبقى محفوظة بعد إعادة تشغيل التطبيق."
         )
 
 
 if "conversations" not in st.session_state:
     st.session_state.conversations = load_conversations()
 
-if "active_chat" not in st.session_state:
-    st.session_state.active_chat = None
-
-
-def new_chat():
-    chat_id = str(uuid.uuid4())
-    st.session_state.conversations[chat_id] = {
-        "title": "محادثة جديدة",
-        "messages": []
-    }
-    st.session_state.active_chat = chat_id
-    save_conversations()
+if "active_chat_id" not in st.session_state:
+    if st.session_state.conversations:
+        st.session_state.active_chat_id = (
+            st.session_state.conversations[0]["id"]
+        )
+    else:
+        chat = new_chat()
+        st.session_state.conversations = [chat]
+        st.session_state.active_chat_id = chat["id"]
+        save_conversations()
 
 
 def get_active_chat():
-    chat_id = st.session_state.active_chat
-    if chat_id and chat_id in st.session_state.conversations:
-        return st.session_state.conversations[chat_id]
-    return None
+    for chat in st.session_state.conversations:
+        if chat["id"] == st.session_state.active_chat_id:
+            return chat
+
+    chat = new_chat()
+    st.session_state.conversations.insert(0, chat)
+    st.session_state.active_chat_id = chat["id"]
+    save_conversations()
+    return chat
 
 
-# ---------- Design ----------
+# -------------------- Sidebar --------------------
 
-st.markdown("""
-<style>
-.stApp {
-    background: linear-gradient(135deg, #eef2ff, #ffffff);
-}
-h1 {
-    color: #2563eb;
-}
-[data-testid="stChatMessage"] {
-    border-radius: 14px;
-    padding: 12px;
-}
-</style>
-""", unsafe_allow_html=True)
+with st.sidebar:
+    st.title("💬 My AI Chatbot")
+    st.caption("مساعدك الذكي باستعمال Gemini")
 
-# ---------- Sidebar ----------
+    if st.button("＋ محادثة جديدة", use_container_width=True):
+        chat = new_chat()
+        st.session_state.conversations.insert(0, chat)
+        st.session_state.active_chat_id = chat["id"]
+        save_conversations()
+        st.rerun()
 
-st.sidebar.title("🤖 My AI Chatbot")
-st.sidebar.caption("مساعدك الذكي")
+    st.divider()
+    st.subheader("محادثاتي")
 
-theme = st.sidebar.radio(
-    "🎨 المظهر",
-    ["☀️ النهاري", "🌙 الليلي"]
-)
+    for chat in st.session_state.conversations:
+        col1, col2 = st.columns([5, 1])
 
-if theme == "🌙 الليلي":
-    st.markdown("""
-    <style>
-    .stApp {
-        background: #111827 !important;
-        color: #f9fafb !important;
-    }
-    [data-testid="stChatMessage"] {
-        background: #1f2937 !important;
-        color: #ffffff !important;
-        border: 1px solid #374151;
-    }
-    [data-testid="stChatMessage"] p,
-    [data-testid="stChatMessage"] li {
-        color: #ffffff !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+        with col1:
+            label = chat.get("title", "محادثة جديدة")[:28]
 
-if st.sidebar.button("➕ محادثة جديدة", use_container_width=True):
-    new_chat()
-    st.rerun()
+            if st.button(
+                label,
+                key=f"open_{chat['id']}",
+                use_container_width=True,
+            ):
+                st.session_state.active_chat_id = chat["id"]
+                st.rerun()
 
-st.sidebar.divider()
-st.sidebar.subheader("📚 المحادثات السابقة")
+        with col2:
+            if st.button("🗑️", key=f"delete_{chat['id']}"):
+                st.session_state.conversations = [
+                    item
+                    for item in st.session_state.conversations
+                    if item["id"] != chat["id"]
+                ]
 
-# Show saved chats
-for chat_id, chat in reversed(list(st.session_state.conversations.items())):
-    title = chat.get("title", "محادثة جديدة")
+                if not st.session_state.conversations:
+                    replacement = new_chat()
+                    st.session_state.conversations = [replacement]
+                    st.session_state.active_chat_id = replacement["id"]
 
-    col1, col2 = st.sidebar.columns([4, 1])
+                elif st.session_state.active_chat_id == chat["id"]:
+                    st.session_state.active_chat_id = (
+                        st.session_state.conversations[0]["id"]
+                    )
 
-    with col1:
-        if st.button(
-            f"💬 {title[:28]}",
-            key=f"open_{chat_id}",
-            use_container_width=True
-        ):
-            st.session_state.active_chat = chat_id
-            st.rerun()
+                save_conversations()
+                st.rerun()
 
-    with col2:
-        if st.button("🗑️", key=f"delete_{chat_id}"):
-            del st.session_state.conversations[chat_id]
+    st.divider()
+    st.caption("Powered by Google Gemini")
 
-            if st.session_state.active_chat == chat_id:
-                st.session_state.active_chat = None
 
-            save_conversations()
-            st.rerun()
-
-# ---------- Main chat ----------
-
-st.title("💬 المحادثة")
+# -------------------- Main Chat Interface --------------------
 
 chat = get_active_chat()
 
-if chat is None:
-    st.info("مرحبا! بدا محادثة جديدة من القائمة الجانبية.")
-else:
-    st.caption(f"المحادثة: {chat['title']}")
+st.title("💬 المحادثة")
+st.caption(f"المحادثة: {chat['title']}")
 
-    for message in chat["messages"]:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+if not chat["messages"]:
+    st.info(
+        "مرحبا بك! 👋\n\n"
+        "كتب سؤالك في الأسفل، وغادي نعاونك."
+    )
 
-    prompt = st.chat_input("كتب السؤال ديالك هنا...")
+# Display previous messages
+for message in chat["messages"]:
+    role = message.get("role", "user")
+
+    with st.chat_message(
+        "assistant" if role == "assistant" else "user"
+    ):
+        st.markdown(message.get("content", ""))
+
+
+# -------------------- Send Message --------------------
+
+prompt = st.chat_input("كتب السؤال ديالك هنا...")
+
+if prompt:
+    prompt = prompt.strip()
 
     if prompt:
         chat["messages"].append({
             "role": "user",
-            "content": prompt
+            "content": prompt,
         })
 
         if chat["title"] == "محادثة جديدة":
-            chat["title"] = prompt[:28]
+            chat["title"] = prompt[:35]
 
         save_conversations()
 
@@ -193,34 +226,43 @@ else:
 
         with st.chat_message("assistant"):
             try:
-                with st.spinner("كنوجد ليك الجواب..."):
-                    history = [
-                        {
+                with st.spinner("Gemini كيوجد ليك الجواب..."):
+                    history = []
+
+                    for message in chat["messages"]:
+                        history.append({
                             "role": (
                                 "user"
-                                if m["role"] == "user"
+                                if message["role"] == "user"
                                 else "model"
                             ),
-                            "parts": [{"text": m["content"]}]
-                        }
-                        for m in chat["messages"]
-                    ]
+                            "parts": [
+                                {"text": message["content"]}
+                            ],
+                        })
 
                     response = client.models.generate_content(
-                        model="gemini-3.5-flash",
-                        contents=history
+                        model=MODEL_NAME,
+                        contents=history,
                     )
 
-                    answer = response.text or "ما توصلني حتى جواب."
+                    answer = response.text
 
-                st.markdown(answer)
+                    if not answer:
+                        answer = "ما توصلني حتى جواب. جرّب سؤال آخر."
 
-                chat["messages"].append({
-                    "role": "assistant",
-                    "content": answer
-                })
-                save_conversations()
+                    st.markdown(answer)
+
+                    chat["messages"].append({
+                        "role": "assistant",
+                        "content": answer,
+                    })
+
+                    save_conversations()
 
             except Exception as error:
-    st.error("Gemini request failed")
-    st.code(repr(error))
+                st.error(
+                    "وقع مشكل أثناء الاتصال بـ Gemini. "
+                    "شوف تفاصيل الخطأ أسفله."
+                )
+                st.code(repr(error))
