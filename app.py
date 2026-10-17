@@ -1,14 +1,21 @@
 
 import os
+import re
 import json
 import uuid
+import base64
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
 
-# ---------------- Configuration ----------------
+# ==================================================
+# 1. CONFIGURATION
+# ==================================================
+
 load_dotenv()
 
 st.set_page_config(
@@ -21,8 +28,22 @@ st.set_page_config(
 MODEL_NAME = "gemini-3.8-flash"
 CHAT_FILE = Path("conversations.json")
 
+SYSTEM_INSTRUCTION = """
+أنت مساعد ذكي ومحترف.
+- أجب دائماً باللغة العربية الفصحى افتراضياً.
+- إذا طلب المستخدم الدارجة المغربية، فأجب بالدارجة المغربية.
+- إذا كتب المستخدم بالدارجة المغربية، يمكنك الإجابة بنفس اللهجة.
+- اشرح البرمجة بطريقة واضحة ومبسطة.
+- اعرض الأكواد داخل كتل Markdown وحدد لغة الكود.
+- لا تغيّر لغة الإجابة إلا إذا طلب المستخدم ذلك.
+- كن دقيقاً، منظماً، ومفيداً.
+"""
 
-# ---------------- API key ----------------
+
+# ==================================================
+# 2. API KEY
+# ==================================================
+
 def get_api_key():
     key = os.getenv("GEMINI_API_KEY", "").strip()
 
@@ -35,7 +56,10 @@ def get_api_key():
         return ""
 
 
-# ---------------- Conversation storage ----------------
+# ==================================================
+# 3. CONVERSATION STORAGE
+# ==================================================
+
 def load_chats():
     if not CHAT_FILE.exists():
         return {}
@@ -43,7 +67,9 @@ def load_chats():
     try:
         with CHAT_FILE.open("r", encoding="utf-8") as file:
             data = json.load(file)
+
         return data if isinstance(data, dict) else {}
+
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -58,20 +84,130 @@ def save_chats():
                 indent=2,
             )
     except OSError:
-        st.warning("تعذر حفظ المحادثات في الملف المحلي.")
+        st.warning("تعذر حفظ المحادثات محلياً.")
 
 
 def new_chat():
     chat_id = str(uuid.uuid4())
+
     st.session_state.chats[chat_id] = {
         "title": "محادثة جديدة",
         "messages": [],
     }
+
     st.session_state.active_chat = chat_id
     save_chats()
 
 
-# ---------------- Session initialization ----------------
+# ==================================================
+# 4. FORMAT TEXT AND CODE
+# ==================================================
+
+def render_assistant_message(content):
+    """
+    عرض جواب المساعد مع تنسيق الأكواد.
+    الأكواد تظهر داخل st.code مع زر النسخ المدمج.
+    """
+
+    pattern = r"```([a-zA-Z0-9_+#.-]*)[ \t]*\n(.*?)```"
+
+    parts = re.split(pattern, content, flags=re.DOTALL)
+
+    i = 0
+
+    while i < len(parts):
+        if i + 2 < len(parts):
+            if parts[i].strip():
+                st.markdown(parts[i])
+
+            language = parts[i + 1].strip() or "text"
+            code = parts[i + 2].rstrip("\n")
+
+            st.code(
+                code,
+                language=language,
+                line_numbers=True,
+                wrap_lines=True,
+            )
+
+            i += 3
+
+        else:
+            if parts[i].strip():
+                st.markdown(parts[i])
+
+            i += 1
+
+
+# ==================================================
+# 5. COPY ANSWER BUTTON
+# ==================================================
+
+def copy_button(content, key):
+    encoded = base64.b64encode(
+        content.encode("utf-8")
+    ).decode("ascii")
+
+    html = """
+    <button id="copy-button"
+        style="
+            background:#f7f7f8;
+            border:1px solid #dddddd;
+            border-radius:9px;
+            padding:7px 12px;
+            cursor:pointer;
+            font-size:13px;
+            color:#333;
+        ">
+        📋 نسخ الجواب
+    </button>
+
+    <script>
+    const button = document.getElementById("copy-button");
+    const encoded = "__CONTENT__";
+
+    function decodeText(value) {
+        const binary = atob(value);
+        const bytes = Uint8Array.from(
+            binary,
+            character => character.charCodeAt(0)
+        );
+        return new TextDecoder("utf-8").decode(bytes);
+    }
+
+    button.addEventListener("click", async () => {
+        const text = decodeText(encoded);
+
+        try {
+            await navigator.clipboard.writeText(text);
+            button.innerText = "✅ تم النسخ";
+        } catch (error) {
+            const area = document.createElement("textarea");
+            area.value = text;
+            document.body.appendChild(area);
+            area.select();
+
+            const success = document.execCommand("copy");
+            area.remove();
+
+            button.innerText = success
+                ? "✅ تم النسخ"
+                : "تعذر النسخ تلقائياً";
+        }
+    });
+    </script>
+    """
+
+    # Prevent HTML/JavaScript injection from the answer.
+    html = html.replace("__CONTENT__", encoded)
+
+    components.html(html, height=45)
+
+
+# ==================================================
+# 6. SESSION STATE
+# ==================================================
+
 if "chats" not in st.session_state:
     st.session_state.chats = load_chats()
 
@@ -79,30 +215,27 @@ if "active_chat" not in st.session_state:
     st.session_state.active_chat = None
 
 if (
-    st.session_state.active_chat not in st.session_state.chats
-    and st.session_state.chats
+    st.session_state.active_chat
+    not in st.session_state.chats
 ):
-    st.session_state.active_chat = next(iter(st.session_state.chats))
+    if st.session_state.chats:
+        st.session_state.active_chat = next(
+            iter(st.session_state.chats)
+        )
+    else:
+        new_chat()
 
-if not st.session_state.chats:
-    new_chat()
 
+# ==================================================
+# 7. PROFESSIONAL DESIGN
+# ==================================================
 
-# ---------------- Professional design ----------------
 st.markdown(
     """
     <style>
-    :root {
-        --background: #ffffff;
-        --sidebar: #f7f7f8;
-        --text: #252525;
-        --border: #e5e7eb;
-        --accent: #10a37f;
-    }
-
     .stApp {
-        background: var(--background);
-        color: var(--text);
+        background: #ffffff;
+        color: #252525;
     }
 
     header[data-testid="stHeader"] {
@@ -110,8 +243,8 @@ st.markdown(
     }
 
     section[data-testid="stSidebar"] {
-        background: var(--sidebar);
-        border-right: 1px solid var(--border);
+        background: #f7f7f8;
+        border-right: 1px solid #e5e7eb;
     }
 
     .block-container {
@@ -122,25 +255,24 @@ st.markdown(
 
     .hero {
         text-align: center;
-        padding: 2rem 0 1.5rem;
+        padding: 3rem 0 2rem;
     }
 
     .hero-icon {
-        font-size: 44px;
-        margin-bottom: 8px;
+        font-size: 48px;
+        margin-bottom: 10px;
     }
 
     .hero h1 {
         font-size: 2.2rem;
         font-weight: 700;
         margin: 0;
-        letter-spacing: -1px;
     }
 
     .hero p {
-        color: #777;
+        color: #777777;
+        margin-top: 12px;
         font-size: 1rem;
-        margin-top: 10px;
     }
 
     [data-testid="stChatMessage"] {
@@ -162,16 +294,16 @@ st.markdown(
 
     .stButton > button {
         border-radius: 12px;
-        min-height: 42px;
+        min-height: 40px;
         transition: all 0.2s ease;
     }
 
     .stButton > button:hover {
-        border-color: var(--accent);
-        color: var(--accent);
+        border-color: #10a37f;
+        color: #10a37f;
     }
 
-    .sidebar-heading {
+    .sidebar-title {
         font-size: 1.2rem;
         font-weight: 700;
         padding: 0.5rem 0 1rem;
@@ -179,7 +311,7 @@ st.markdown(
 
     .footer-note {
         text-align: center;
-        color: #888;
+        color: #888888;
         font-size: 0.8rem;
         padding-top: 1.5rem;
     }
@@ -204,10 +336,13 @@ st.markdown(
 )
 
 
-# ---------------- Sidebar ----------------
+# ==================================================
+# 8. SIDEBAR
+# ==================================================
+
 with st.sidebar:
     st.markdown(
-        '<div class="sidebar-heading">💬 My AI Chat</div>',
+        '<div class="sidebar-title">💬 My AI Chat</div>',
         unsafe_allow_html=True,
     )
 
@@ -216,15 +351,19 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    st.caption("محادثاتك السابقة")
+    st.caption("المحادثات السابقة")
 
-    # Most recent conversations first
     chat_ids = list(st.session_state.chats.keys())[::-1]
 
     for chat_id in chat_ids:
         chat = st.session_state.chats[chat_id]
         title = chat.get("title", "محادثة جديدة")
-        short_title = title[:27] + ("…" if len(title) > 27 else "")
+
+        short_title = (
+            title[:25] + "…"
+            if len(title) > 25
+            else title
+        )
 
         col1, col2 = st.columns([5, 1])
 
@@ -239,21 +378,28 @@ with st.sidebar:
 
         with col2:
             if st.button("⋯", key=f"menu_{chat_id}"):
-                st.session_state[f"show_delete_{chat_id}"] = (
-                    not st.session_state.get(f"show_delete_{chat_id}", False)
+                state_key = f"delete_mode_{chat_id}"
+
+                st.session_state[state_key] = (
+                    not st.session_state.get(state_key, False)
                 )
 
-        if st.session_state.get(f"show_delete_{chat_id}", False):
+        if st.session_state.get(
+            f"delete_mode_{chat_id}", False
+        ):
             if st.button(
                 "🗑️ حذف المحادثة",
                 key=f"delete_{chat_id}",
                 use_container_width=True,
             ):
                 del st.session_state.chats[chat_id]
-                st.session_state.pop(f"show_delete_{chat_id}", None)
 
                 if st.session_state.active_chat == chat_id:
                     st.session_state.active_chat = None
+
+                st.session_state.pop(
+                    f"delete_mode_{chat_id}", None
+                )
 
                 if not st.session_state.chats:
                     new_chat()
@@ -269,16 +415,13 @@ with st.sidebar:
     st.caption("مدعوم بالذكاء الاصطناعي Gemini")
 
 
-# ---------------- Current chat ----------------
+# ==================================================
+# 9. ACTIVE CONVERSATION
+# ==================================================
+
 active_id = st.session_state.active_chat
-
-if active_id not in st.session_state.chats:
-    new_chat()
-    active_id = st.session_state.active_chat
-
 current_chat = st.session_state.chats[active_id]
 messages = current_chat["messages"]
-
 
 if not messages:
     st.markdown(
@@ -295,18 +438,28 @@ else:
     st.markdown("## 💬 المحادثة")
 
 
-# Display previous messages
-for message in messages:
+# Display conversation history
+for index, message in enumerate(messages):
     role = message.get("role", "assistant")
     content = message.get("content", "")
 
     with st.chat_message(
         "user" if role == "user" else "assistant"
     ):
-        st.markdown(content)
+        if role == "assistant":
+            render_assistant_message(content)
+            copy_button(
+                content,
+                f"history-{active_id}-{index}",
+            )
+        else:
+            st.markdown(content)
 
 
-# ---------------- Send a message ----------------
+# ==================================================
+# 10. SEND MESSAGE TO GEMINI
+# ==================================================
+
 prompt = st.chat_input("اكتب سؤالك هنا...")
 
 if prompt:
@@ -314,19 +467,23 @@ if prompt:
 
     if not api_key:
         st.error(
-            "مفتاح Gemini غير موجود. أضف GEMINI_API_KEY في "
-            "Streamlit Secrets."
+            "مفتاح Gemini غير موجود. "
+            "أضف GEMINI_API_KEY في Streamlit Secrets."
         )
         st.stop()
 
-    # Save and display user message
-    messages.append({"role": "user", "content": prompt})
+    # Save user message
+    messages.append({
+        "role": "user",
+        "content": prompt,
+    })
 
     if current_chat["title"] == "محادثة جديدة":
         current_chat["title"] = prompt[:40]
 
     save_chats()
 
+    # Display user message immediately
     with st.chat_message("user"):
         st.markdown(prompt)
 
@@ -335,38 +492,46 @@ if prompt:
             client = genai.Client(api_key=api_key)
 
             history = []
+
             for message in messages:
-                history.append(
-                    {
-                        "role": (
-                            "user"
-                            if message["role"] == "user"
-                            else "model"
-                        ),
-                        "parts": [{"text": message["content"]}],
-                    }
-                )
+                history.append({
+                    "role": (
+                        "user"
+                        if message["role"] == "user"
+                        else "model"
+                    ),
+                    "parts": [
+                        {"text": message["content"]}
+                    ],
+                })
 
             with st.spinner("جاري التفكير..."):
                 response = client.models.generate_content(
                     model=MODEL_NAME,
                     contents=history,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_INSTRUCTION
+                    ),
                 )
 
-            answer = response.text
-
-            if not answer:
-                answer = "لم أتمكن من إنشاء جواب. حاول مرة أخرى."
-
-            st.markdown(answer)
-
-            messages.append(
-                {"role": "assistant", "content": answer}
+            answer = response.text or (
+                "لم أتمكن من إنشاء جواب. حاول مرة أخرى."
             )
+
+            render_assistant_message(answer)
+            copy_button(
+                answer,
+                f"new-{uuid.uuid4().hex[:8]}",
+            )
+
+            messages.append({
+                "role": "assistant",
+                "content": answer,
+            })
+
             save_chats()
 
         except Exception as error:
-            # Remove the unanswered user message so it can be retried
             if messages and messages[-1]["role"] == "user":
                 messages.pop()
                 save_chats()
@@ -374,9 +539,15 @@ if prompt:
             st.error("وقع مشكل أثناء الاتصال بـ Gemini.")
             st.code(repr(error))
 
+# ==================================================
+# 11. FOOTER
+# ==================================================
+
 st.markdown(
-    '<div class="footer-note">'
-    'تحقق من المعلومات المهمة قبل الاعتماد عليها.'
-    '</div>',
+    """
+    <div class="footer-note">
+        تحقق من المعلومات المهمة قبل الاعتماد عليها.
+    </div>
+    """,
     unsafe_allow_html=True,
 )
