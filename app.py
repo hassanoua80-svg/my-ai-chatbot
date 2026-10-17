@@ -223,4 +223,4 @@ else:
 
             except Exception as error:
                 st.error("وقع مشكل في الاتصال بـ Gemini.")
-                st.code(repr(error))
+                st.code(str(error).encode("ascii", errors="backslashreplace").decode("ascii"))
