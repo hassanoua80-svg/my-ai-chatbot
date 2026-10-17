@@ -1,268 +1,78 @@
 
-import os
-import json
-import uuid
-from datetime import datetime
+# ---------- Professional ChatGPT-style design ----------
+st.markdown("""
+<style>
+:root {
+    --chat-bg: #ffffff;
+    --chat-sidebar: #f7f7f8;
+    --chat-text: #242424;
+    --chat-border: #e5e5e5;
+}
 
-import streamlit as st
-from dotenv import load_dotenv
-from google import genai
+.stApp {
+    background: var(--chat-bg);
+    color: var(--chat-text);
+}
 
-# -------------------- Configuration --------------------
+header[data-testid="stHeader"] {
+    background: rgba(255, 255, 255, 0.9);
+}
 
-load_dotenv()
+section[data-testid="stSidebar"] {
+    background: var(--chat-sidebar);
+    border-right: 1px solid var(--chat-border);
+}
 
-st.set_page_config(
-    page_title="My AI Chatbot",
-    page_icon="💬",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+section[data-testid="stSidebar"] button {
+    border-radius: 10px;
+}
 
-CHAT_FILE = "conversations.json"
-MODEL_NAME = "gemini-3.8-flash"
+.block-container {
+    max-width: 900px;
+    padding-top: 2rem;
+    padding-bottom: 7rem;
+}
 
+[data-testid="stChatMessage"] {
+    border: 1px solid #eeeeee;
+    border-radius: 16px;
+    padding: 1rem 1.1rem;
+    margin-bottom: 12px;
+    background: #ffffff;
+}
 
-# -------------------- API Key --------------------
+[data-testid="stChatInput"] {
+    border-radius: 18px;
+}
 
-def get_api_key():
-    key = os.getenv("GEMINI_API_KEY")
+[data-testid="stChatInput"] textarea {
+    font-size: 16px;
+    line-height: 1.7;
+}
 
-    if key:
-        return key
+.stButton > button {
+    border-radius: 12px;
+    transition: all 0.2s ease;
+}
 
-    try:
-        return st.secrets["GEMINI_API_KEY"]
-    except (KeyError, FileNotFoundError):
-        return None
+.stButton > button:hover {
+    border-color: #888888;
+}
 
+h1, h2, h3 {
+    letter-spacing: -0.4px;
+}
 
-API_KEY = get_api_key()
-
-if not API_KEY:
-    st.error(
-        "مفتاح Gemini API غير موجود. "
-        "أضفه في Streamlit Secrets."
-    )
-    st.stop()
-
-
-@st.cache_resource
-def get_client(api_key):
-    return genai.Client(api_key=api_key)
-
-
-client = get_client(API_KEY)
-
-
-# -------------------- Conversations --------------------
-
-def new_chat():
-    chat_id = str(uuid.uuid4())
-
-    return {
-        "id": chat_id,
-        "title": "محادثة جديدة",
-        "messages": [],
-        "created_at": datetime.now().isoformat(),
+@media (max-width: 768px) {
+    .block-container {
+        padding: 1rem 0.7rem 5rem 0.7rem;
     }
 
-
-def load_conversations():
-    if not os.path.exists(CHAT_FILE):
-        return []
-
-    try:
-        with open(CHAT_FILE, "r", encoding="utf-8") as file:
-            data = json.load(file)
-
-        return data if isinstance(data, list) else []
-
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def save_conversations():
-    try:
-        with open(CHAT_FILE, "w", encoding="utf-8") as file:
-            json.dump(
-                st.session_state.conversations,
-                file,
-                ensure_ascii=False,
-                indent=2,
-            )
-    except OSError:
-        st.warning(
-            "تعذر حفظ المحادثات على الخادم. "
-            "قد لا تبقى محفوظة بعد إعادة تشغيل التطبيق."
-        )
-
-
-if "conversations" not in st.session_state:
-    st.session_state.conversations = load_conversations()
-
-if "active_chat_id" not in st.session_state:
-    if st.session_state.conversations:
-        st.session_state.active_chat_id = (
-            st.session_state.conversations[0]["id"]
-        )
-    else:
-        chat = new_chat()
-        st.session_state.conversations = [chat]
-        st.session_state.active_chat_id = chat["id"]
-        save_conversations()
-
-
-def get_active_chat():
-    for chat in st.session_state.conversations:
-        if chat["id"] == st.session_state.active_chat_id:
-            return chat
-
-    chat = new_chat()
-    st.session_state.conversations.insert(0, chat)
-    st.session_state.active_chat_id = chat["id"]
-    save_conversations()
-    return chat
-
-
-# -------------------- Sidebar --------------------
-
-with st.sidebar:
-    st.title("💬 My AI Chatbot")
-    st.caption("مساعدك الذكي باستعمال Gemini")
-
-    if st.button("＋ محادثة جديدة", use_container_width=True):
-        chat = new_chat()
-        st.session_state.conversations.insert(0, chat)
-        st.session_state.active_chat_id = chat["id"]
-        save_conversations()
-        st.rerun()
-
-    st.divider()
-    st.subheader("محادثاتي")
-
-    for chat in st.session_state.conversations:
-        col1, col2 = st.columns([5, 1])
-
-        with col1:
-            label = chat.get("title", "محادثة جديدة")[:28]
-
-            if st.button(
-                label,
-                key=f"open_{chat['id']}",
-                use_container_width=True,
-            ):
-                st.session_state.active_chat_id = chat["id"]
-                st.rerun()
-
-        with col2:
-            if st.button("🗑️", key=f"delete_{chat['id']}"):
-                st.session_state.conversations = [
-                    item
-                    for item in st.session_state.conversations
-                    if item["id"] != chat["id"]
-                ]
-
-                if not st.session_state.conversations:
-                    replacement = new_chat()
-                    st.session_state.conversations = [replacement]
-                    st.session_state.active_chat_id = replacement["id"]
-
-                elif st.session_state.active_chat_id == chat["id"]:
-                    st.session_state.active_chat_id = (
-                        st.session_state.conversations[0]["id"]
-                    )
-
-                save_conversations()
-                st.rerun()
-
-    st.divider()
-    st.caption("Powered by Google Gemini")
-
-
-# -------------------- Main Chat Interface --------------------
-
-chat = get_active_chat()
-
-st.title("💬 المحادثة")
-st.caption(f"المحادثة: {chat['title']}")
-
-if not chat["messages"]:
-    st.info(
-        "مرحبا بك! 👋\n\n"
-        "كتب سؤالك في الأسفل، وغادي نعاونك."
-    )
-
-# Display previous messages
-for message in chat["messages"]:
-    role = message.get("role", "user")
-
-    with st.chat_message(
-        "assistant" if role == "assistant" else "user"
-    ):
-        st.markdown(message.get("content", ""))
-
-
-# -------------------- Send Message --------------------
-
-prompt = st.chat_input("كتب السؤال ديالك هنا...")
-
-if prompt:
-    prompt = prompt.strip()
-
-    if prompt:
-        chat["messages"].append({
-            "role": "user",
-            "content": prompt,
-        })
-
-        if chat["title"] == "محادثة جديدة":
-            chat["title"] = prompt[:35]
-
-        save_conversations()
-
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        with st.chat_message("assistant"):
-            try:
-                with st.spinner("Gemini كيوجد ليك الجواب..."):
-                    history = []
-
-                    for message in chat["messages"]:
-                        history.append({
-                            "role": (
-                                "user"
-                                if message["role"] == "user"
-                                else "model"
-                            ),
-                            "parts": [
-                                {"text": message["content"]}
-                            ],
-                        })
-
-                    response = client.models.generate_content(
-                        model=MODEL_NAME,
-                        contents=history,
-                    )
-
-                    answer = response.text
-
-                    if not answer:
-                        answer = "ما توصلني حتى جواب. جرّب سؤال آخر."
-
-                    st.markdown(answer)
-
-                    chat["messages"].append({
-                        "role": "assistant",
-                        "content": answer,
-                    })
-
-                    save_conversations()
-
-            except Exception as error:
-                st.error(
-                    "وقع مشكل أثناء الاتصال بـ Gemini. "
-                    "شوف تفاصيل الخطأ أسفله."
-                )
-                st.code(repr(error))
+    [data-testid="stChatMessage"] {
+        padding: 0.8rem;
+        border-radius: 12px;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+# ------------------------------------------------------
