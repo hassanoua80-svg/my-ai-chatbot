@@ -20,6 +20,12 @@ st.set_page_config(
 )
 
 API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not API_KEY:
+    try:
+        API_KEY = st.secrets["GEMINI_API_KEY"]
+    except (KeyError, FileNotFoundError):
+        API_KEY = None
 CHAT_FILE = "conversations.json"
 
 if not API_KEY:
