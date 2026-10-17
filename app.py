@@ -1,5 +1,7 @@
 
 import os
+import json
+import uuid
 import streamlit as st
 from dotenv import load_dotenv
 from google import genai
@@ -9,94 +11,205 @@ load_dotenv()
 st.set_page_config(
     page_title="My AI Chatbot",
     page_icon="🤖",
-    layout="centered"
+    layout="wide"
 )
 
-api_key = os.getenv("GEMINI_API_KEY")
+API_KEY = os.getenv("GEMINI_API_KEY")
+CHAT_FILE = "conversations.json"
 
-if not api_key:
-    st.error("تأكد من وجود GEMINI_API_KEY داخل ملف .env")
+if not API_KEY:
+    st.error("تأكد من وجود GEMINI_API_KEY في ملف .env")
     st.stop()
 
-client = genai.Client(api_key=api_key)
+client = genai.Client(api_key=API_KEY)
+
+# ---------- Save and load conversations ----------
+
+def load_conversations():
+    if os.path.exists(CHAT_FILE):
+        try:
+            with open(CHAT_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def save_conversations():
+    with open(CHAT_FILE, "w", encoding="utf-8") as f:
+        json.dump(
+            st.session_state.conversations,
+            f,
+            ensure_ascii=False,
+            indent=2
+        )
+
+
+if "conversations" not in st.session_state:
+    st.session_state.conversations = load_conversations()
+
+if "active_chat" not in st.session_state:
+    st.session_state.active_chat = None
+
+
+def new_chat():
+    chat_id = str(uuid.uuid4())
+    st.session_state.conversations[chat_id] = {
+        "title": "محادثة جديدة",
+        "messages": []
+    }
+    st.session_state.active_chat = chat_id
+    save_conversations()
+
+
+def get_active_chat():
+    chat_id = st.session_state.active_chat
+    if chat_id and chat_id in st.session_state.conversations:
+        return st.session_state.conversations[chat_id]
+    return None
+
+
+# ---------- Design ----------
 
 st.markdown("""
 <style>
 .stApp {
-    background-color: #f7f8fc;
-}
-.block-container {
-    max-width: 850px;
-    padding-top: 2rem;
-}
-.stChatMessage {
-    border-radius: 16px;
-    padding: 12px;
+    background: linear-gradient(135deg, #eef2ff, #ffffff);
 }
 h1 {
-    color: #3438a5;
+    color: #2563eb;
+}
+[data-testid="stChatMessage"] {
+    border-radius: 14px;
+    padding: 12px;
 }
 </style>
 """, unsafe_allow_html=True)
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# ---------- Sidebar ----------
 
-with st.sidebar:
-    st.title("🤖 مساعدي الذكي")
-    st.caption("مساعدك الشخصي باستعمال Gemini")
+st.sidebar.title("🤖 My AI Chatbot")
+st.sidebar.caption("مساعدك الذكي")
 
-    if st.button("➕ محادثة جديدة", use_container_width=True):
-        st.session_state.messages = []
-        st.rerun()
+theme = st.sidebar.radio(
+    "🎨 المظهر",
+    ["☀️ النهاري", "🌙 الليلي"]
+)
 
-    st.divider()
-    st.write("💬 المحادثة الحالية")
-    st.caption("تقدر تبدا محادثة جديدة فالوقت اللي بغيتي.")
+if theme == "🌙 الليلي":
+    st.markdown("""
+    <style>
+    .stApp {
+        background: #111827 !important;
+        color: #f9fafb !important;
+    }
+    [data-testid="stChatMessage"] {
+        background: #1f2937 !important;
+        color: #ffffff !important;
+        border: 1px solid #374151;
+    }
+    [data-testid="stChatMessage"] p,
+    [data-testid="stChatMessage"] li {
+        color: #ffffff !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-st.title("🤖 My AI Chatbot")
-st.write("مرحبا بك! سولني على البرمجة أو أي موضوع آخر.")
+if st.sidebar.button("➕ محادثة جديدة", use_container_width=True):
+    new_chat()
+    st.rerun()
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+st.sidebar.divider()
+st.sidebar.subheader("📚 المحادثات السابقة")
 
-if prompt := st.chat_input("كتب السؤال ديالك هنا..."):
-    st.session_state.messages.append({
-        "role": "user",
-        "content": prompt
-    })
+# Show saved chats
+for chat_id, chat in reversed(list(st.session_state.conversations.items())):
+    title = chat.get("title", "محادثة جديدة")
 
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    col1, col2 = st.sidebar.columns([4, 1])
 
-    history = []
+    with col1:
+        if st.button(
+            f"💬 {title[:28]}",
+            key=f"open_{chat_id}",
+            use_container_width=True
+        ):
+            st.session_state.active_chat = chat_id
+            st.rerun()
 
-    for message in st.session_state.messages:
-        history.append({
-            "role": "user" if message["role"] == "user" else "model",
-            "parts": [{"text": message["content"]}]
+    with col2:
+        if st.button("🗑️", key=f"delete_{chat_id}"):
+            del st.session_state.conversations[chat_id]
+
+            if st.session_state.active_chat == chat_id:
+                st.session_state.active_chat = None
+
+            save_conversations()
+            st.rerun()
+
+# ---------- Main chat ----------
+
+st.title("💬 المحادثة")
+
+chat = get_active_chat()
+
+if chat is None:
+    st.info("مرحبا! بدا محادثة جديدة من القائمة الجانبية.")
+else:
+    st.caption(f"المحادثة: {chat['title']}")
+
+    for message in chat["messages"]:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    prompt = st.chat_input("كتب السؤال ديالك هنا...")
+
+    if prompt:
+        chat["messages"].append({
+            "role": "user",
+            "content": prompt
         })
 
-    try:
-        with st.spinner("⏳ Gemini كيوجد الجواب..."):
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=history
-            )
+        if chat["title"] == "محادثة جديدة":
+            chat["title"] = prompt[:28]
 
-        answer = response.text or "ما توصلني حتى جواب."
+        save_conversations()
 
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": answer
-        })
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            st.markdown(answer)
+            try:
+                with st.spinner("كنوجد ليك الجواب..."):
+                    history = [
+                        {
+                            "role": (
+                                "user"
+                                if m["role"] == "user"
+                                else "model"
+                            ),
+                            "parts": [{"text": m["content"]}]
+                        }
+                        for m in chat["messages"]
+                    ]
 
-    except Exception:
-        st.error(
-            "وقع مشكل فالاتصال بـ Gemini. "
-            "تأكد من المفتاح واسم الموديل والإنترنت."
-        )
+                    response = client.models.generate_content(
+                        model="gemini-3.5-flash",
+                        contents=history
+                    )
+
+                    answer = response.text or "ما توصلني حتى جواب."
+
+                st.markdown(answer)
+
+                chat["messages"].append({
+                    "role": "assistant",
+                    "content": answer
+                })
+                save_conversations()
+
+            except Exception as error:
+                st.error("وقع مشكل في الاتصال بـ Gemini.")
+                st.code(str(error))
